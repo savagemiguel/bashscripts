@@ -14,8 +14,8 @@ setlocal EnableDelayedExpansion
 openfiles >nul 2>&1
 if %errorlevel% NEQ 0 (
    echo [ERROR] Please run this script as Administrator!
-   pause
    exit /b 1
+   pause
 )
 
 :: --- Title & Information ---
@@ -37,6 +37,7 @@ echo.
 :: --- Confirm User Wants to Proceed ---
 choice /M "Do you wish to proceed with activation?"
 if errorlevel 2 exit /b
+pause
 
 :: --- Clean Previous Keys & KMS Settings ---
 echo [*] Cleaning previous activation data...
@@ -118,5 +119,5 @@ if "%ACTIVATED%"=="1" (
 )
 
 :end
-pause >nul
 exit /b
+pause >nul
