@@ -1,5 +1,6 @@
 {
     "latest_version": "1.0.0",
-    "release_notes": "https://github.com/savagemiguel/bashscripts/blob/main/phynx-mail/release-notes",
-    "changelog": "https://github.com/savagemiguel/bashscripts/blob/main/phynx-mail/changelog"
+    "release_notes": "https://raw.githubusercontent.com/savagemiguel/bashscripts/refs/heads/phynx-mail/RELEASE-NOTES",
+    "changelog": "https://raw.githubusercontent.com/savagemiguel/bashscripts/refs/heads/phynx-mail/CHANGELOG"
+
 }
