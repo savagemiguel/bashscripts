@@ -143,16 +143,28 @@ echo "Detected server IP: $server_ip"
 
 # Step 3: Prompt for hostname
 echo "Step 3: Configuring hostname..."
-read -p "Enter the hostname for the mail server (e.g., mail.example.com): " fqdn
+echo "The mail subdomain will automatically be added."
+read -p "Enter the hostname for the mail server without www. (e.g., example.com): " fqdn
 # Validate hostname
 if [[ ! "$fqdn" =~ ^[a-zA-Z0-9.-]+$ ]]; then
     echo "Invalid hostname. Please use a valid domain name."
     exit 1
 fi
 
-# Step 4: Prompt for SSL certificate configuration
-echo "Step 4: SSL certificate configuration..."
-read -p "Do you want to configure an SSL certificate? (Y/N): " ssl_choice
+# Step 4: Installing required packages
+echo "Step 4: Installing required packages..."
+required_packages=("postfix" "dovecot-core" "dovecot-imapd" "certbot")
+for pkg in "${required_packages[@]}"; do
+    if ! dpkg -l | grep -qw "$pkg"; then
+        execute "apt-get install -y $pkg"
+    else
+        echo "$pkg is already installed."
+    fi
+done
+
+# Step 5: Prompt for SSL certificate configuration
+echo "Step 5: SSL certificate configuration..."
+read -p "Do you want to configure an SSL certificate? (Y/n): " ssl_choice
 if [[ "$ssl_choice" =~ ^[Yy]$ ]]; then
     self_signed="no"
     cert_config="yes"
@@ -180,8 +192,8 @@ else
     echo "Skipping SSL certificate configuration."
 fi
 
-# Step 5: Prompt for IPv6 usage
-echo "Step 5: Checking IPv6 configuration..."
+# Step 6: Prompt for IPv6 usage
+echo "Step 6: Checking IPv6 configuration..."
 read -p "Will you use IPv6? (Y/N): " ipv6_choice
 if [[ "$ipv6_choice" =~ ^[Yy]$ ]]; then
     ipv6=$(host "$fqdn" | grep "IPv6" | awk '{print $NF}')
@@ -193,8 +205,8 @@ else
     ipv6=""
 fi
 
-# Step 6: Customize variables
-echo "Step 6: Customizing variables..."
+# Step 7: Customize variables
+echo "Step 7: Customizing variables..."
 read -p "Enter the mailbox directory (default: maildir): " mailbox_dir
 mailbox_dir=${mailbox_dir:-maildir}
 
@@ -222,8 +234,8 @@ case "$linux_distro" in
         ;;
 esac
 
-# Step 7: Install required packages
-echo "Step 7: Installing required packages..."
+# Step 8: Install required packages
+echo "Step 8: Installing required packages..."
 install_packages="postfix postfix-pcre dovecot-imapd dovecot-pop3d dovecot-sieve opendkim opendkim-tools spamassassin spamc net-tools fail2ban bind9-host"
 echo "This may take a few minutes."
 show_progress 10 &  # Simulate a 10-second progress bar
@@ -594,7 +606,7 @@ useradd -m -G mail postmaster
 
 # Create a new cronjob that deletes old emails past certain day count
 cat <<EOF > /etc/cron.weekly/postmaster-clean
-#!/bin/sh
+#!/bin/bash
 
 # Weekly Postmaster Cleaning CRON
 find /home/postmaster/Mail -type f -mtime +30 -name '*.mail*' -delete >/dev/null 2>&1
@@ -632,7 +644,7 @@ systemctl restart postfix dovecot
 
 "
 
-# Step 7: Post-installation summary
+# Step 9: Post-installation summary
 echo "\nPost-installation Summary:\n"
 echo "Server IP: $server_ip"
 echo "Hostname: $fqdn"
@@ -642,38 +654,6 @@ echo "Mailbox Directory: $mailbox_dir"
 echo "Allowed Protocols: $protocol"
 echo "Open Ports: $ports"
 echo "\nInstallation completed successfully. Please verify the configuration and restart the necessary services."
-
-# Step 9: Generate DNS records
-echo "\nStep 9: Generating DNS records..."
-
-echo "Suggested DNS Records:\n"
-echo "A Record:"
-echo "  Name: $fqdn"
-echo "  Type: A"
-echo "  Value: $server_ip"
-
-echo "MX Record:"
-echo "  Name: $fqdn"
-echo "  Type: MX"
-echo "  Priority: 10"
-echo "  Value: $fqdn"
-
-echo "SPF Record:"
-echo "  Name: $fqdn"
-echo "  Type: TXT"
-echo "  Value: v=spf1 mx -all"
-
-echo "DKIM Record:"
-echo "  Name: default._domainkey.$fqdn"
-echo "  Type: TXT"
-echo "  Value: (Add your DKIM public key here)"
-
-echo "DMARC Record:"
-echo "  Name: _dmarc.$fqdn"
-echo "  Type: TXT"
-echo "  Value: v=DMARC1; p=none"
-
-echo "\nPlease add these records to your DNS provider to complete the mail server setup."
 
 # Step 10: Uninstallation option
 if [ "$1" = "--uninstall" ]; then
