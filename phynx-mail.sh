@@ -154,26 +154,30 @@ server_ip=$(hostname -I | awk '{print $1}')
 check_success "Failed to retrieve server IP."
 echo "Detected server IP: $server_ip"
 
-# Step 3: Prompt for hostname
+# Step 3: Prompt for hostname and configure mailfqdn
 echo "Step 3: Configuring hostname..."
 echo "The mail subdomain will automatically be added."
-read -p "Enter the hostname for the mail server without www. (e.g., example.com): " fqdn
-# Validate hostname
+read -p "Enter the domain name for the mail server without the www. (e.g., example.com): " fqdn
+# Validate domain name
 if [[ ! "$fqdn" =~ ^[a-zA-Z0-9.-]+$ ]]; then
-    echo "Invalid hostname. Please use a valid domain name."
+    echo "Invalid domain name. Please use a valid domain name."
     exit 1
 fi
+sub_domain="mail"
+mailfqdn="$sub_domain.$fqdn"
+echo "Configured mail server FQDN: $mailfqdn"
 
-# Step 4: Installing required packages
+# Step 4: Install required packages
 echo "Step 4: Installing required packages..."
-required_packages=("postfix" "dovecot-core" "dovecot-imapd" "certbot")
+required_packages=("postfix" "postfix-pcre" "dovecot-imapd" "dovecot-pop3d" "dovecot-sieve" "opendkim" "opendkim-tools" "spamassassin" "spamc" "net-tools" "fail2ban" "bind9-host")
 for pkg in "${required_packages[@]}"; do
     if ! dpkg -l | grep -qw "$pkg"; then
-        execute "apt-get install -y $pkg"
+        execute "$package_manager install -y -qq $pkg"
     else
         echo "$pkg is already installed."
     fi
 done
+echo "All required packages are installed."
 
 # Step 5: Prompt for SSL certificate configuration
 echo "Step 5: SSL certificate configuration..."
@@ -219,14 +223,14 @@ else
 fi
 
 # Step 7: Customize variables
-echo "Step 7: Customizing variables..."
+echo "Step 7: Customizing configuration..."
 read -p "Enter the mailbox directory (default: maildir): " mailbox_dir
 mailbox_dir=${mailbox_dir:-maildir}
 
 read -p "Enter the allowed protocols (default: imap pop3): " protocol
 protocol=${protocol:-"imap pop3"}
 
-read -p "Enter the ports to open (default: 25 80 110 465 587 993 995): " ports
+read -p "Enter the ports to open (default: 25, 80, 110, 465, 587, 993, 995): " ports
 ports=${ports:-"25 80 110 465 587 993 995"}
 
 # Detect Linux distribution
@@ -246,14 +250,6 @@ case "$linux_distro" in
         exit 1
         ;;
 esac
-
-# Step 8: Install required packages
-echo "Step 8: Installing required packages..."
-install_packages="postfix postfix-pcre dovecot-imapd dovecot-pop3d dovecot-sieve opendkim opendkim-tools spamassassin spamc net-tools fail2ban bind9-host"
-echo "This may take a few minutes."
-show_progress 10 &  # Simulate a 10-second progress bar
-execute "$package_manager install -y -qq $install_packages"
-wait
 
 # Notify user of completion
 echo "Packages installed successfully."
