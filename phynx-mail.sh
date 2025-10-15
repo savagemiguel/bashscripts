@@ -18,7 +18,7 @@ fi
 # Function to check the success of the last command
 check_success() {
     if [ $? -ne 0 ]; then
-        echo "Error: $1"
+        echo "ERROR: $1"
         exit 1
     fi
 }
@@ -76,6 +76,7 @@ compare_versions() {
 # Enhance logging for version checks
 # Add error handling for version check
 # Update version check to parse JSON
+# Enhance error handling for jq not found during version check
 check_latest_version() {
     echo "Checking for the latest version..." | tee -a "$LOG_FILE"
     local retries=3
@@ -84,6 +85,18 @@ check_latest_version() {
     local changelog=""
 
     for ((i=1; i<=retries; i++)); do
+        if ! command -v jq >/dev/null 2>&1; then
+            echo "ERROR: Unable to check for the latest version after $i attempts. 'jq' is not installed." | tee -a "$LOG_FILE"
+            echo "'jq' is a lightweight and flexible command-line JSON processor, which is required for parsing JSON to check the version for updates." | tee -a "$LOG_FILE"
+            read -p "Would you like to install 'jq' now? (Y/n): " install_jq_choice
+            if [[ "$install_jq_choice" =~ ^[Yy]$ ]]; then
+                execute "apt-get install -y jq"
+            else
+                echo "'jq' is required for version checking. Please install it manually and re-run the script." | tee -a "$LOG_FILE"
+                exit 1
+            fi
+        fi
+
         local response=$(curl -s https://raw.githubusercontent.com/savagemiguel/bashscripts/refs/heads/phynx-mail/phynx-mail-latest-version.json || echo "")
         if [ -n "$response" ]; then
             latest_version=$(echo "$response" | jq -r '.latest_version')
@@ -96,14 +109,14 @@ check_latest_version() {
     done
 
     if [ -z "$latest_version" ]; then
-        echo "Error: Unable to check for the latest version after $retries attempts. Proceeding with the current version: $VERSION." | tee -a "$LOG_FILE"
+        echo "ERROR: Unable to check for the latest version after $retries attempts. Proceeding with the current version: $VERSION." | tee -a "$LOG_FILE"
         return
     fi
 
     compare_versions "$VERSION" "$latest_version"
     case $? in
         1)
-            echo "Warning: You are using version $VERSION, but the latest version is $latest_version." | tee -a "$LOG_FILE"
+            echo "WARNING: You are using version $VERSION, but the latest version is $latest_version." | tee -a "$LOG_FILE"
             echo "Release Notes: $release_notes" | tee -a "$LOG_FILE"
             echo "Changelog: $changelog" | tee -a "$LOG_FILE"
             echo "Please update the script to the latest version before proceeding." | tee -a "$LOG_FILE"
@@ -129,7 +142,7 @@ echo "Step 1: Checking dependencies..."
 required_commands=("host" "awk" "apt-get")
 for cmd in "${required_commands[@]}"; do
     if ! command -v $cmd >/dev/null 2>&1; then
-        echo "Error: Required command '$cmd' is not installed. Please install it and try again."
+        echo "ERROR: Required command '$cmd' is not installed. Please install it and try again."
         exit 1
     fi
 done
@@ -803,7 +816,7 @@ update_script() {
 
     curl -s -o "$temp_file" "$script_url"
     if [ $? -ne 0 ]; then
-        echo "Error: Failed to download the latest version. Please update manually."
+        echo "ERROR: Failed to download the latest version. Please update manually."
         return 1
     fi
 
