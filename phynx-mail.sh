@@ -2,6 +2,50 @@
 ###########################################
 # INTERACTIVE INSTALLATION SCRIPT #
 
+# Function to handle script interruption
+handle_interrupt() {
+    echo -e "\nWARNING: Are you sure you want to cancel the script? (Y/n)"
+    read -r cancel_choice
+    if [[ "$cancel_choice" =~ ^[Yy]$ ]]; then
+        echo "Script canceled by the user."
+        exit 1
+    else
+        echo "Resuming script..."
+    fi
+}
+
+# Create a dynamic OS version number list
+supported_versions_list() {
+    local start_major=20
+    local start_minor=4
+    local max_major=25
+    local minor_versions=(04 10) # Ubuntu releases in April (.04) and October (.10)
+    local max_point_release=5 # Maximum point releases (e.g., .1, .2, .3)
+
+    echo "Supported Ubuntu Versions:"
+    for ((major=start_major; major<=max_major; major++)); do
+        for minor in "${minor_versions[@]}"; do
+            # Skip versions less than 20.04
+            if ((major == 20 && minor < start_minor)); then
+                continue
+            fi
+
+            # Print the base version
+            echo "- $major.$minor"
+
+            # Add point releases for LTS versions (April releases only)
+            if [[ "$minor" == "04" ]]; then
+                for ((point=1; point<=max_point_release; point++)); do
+                    echo "- $major.$minor.$point"
+                done
+            fi
+        done
+    done
+}
+
+# Trap Ctrl+C (SIGINT) and call the interrupt handler
+trap handle_interrupt SIGINT
+
 umask 0022
 
 # Log file
@@ -37,27 +81,130 @@ execute() {
 show_progress() {
     local duration=$1
     local interval=0.1
-    local steps=$((duration / interval))
+    local steps=$(echo "$duration / $interval" | bc) # Use bench calculator (bc) for floating-point division in bash
     local progress=0
 
     while [ $progress -lt $steps ]; do
         printf "\r["
-        for ((i = 0; i < $steps; i++)); do
+        for ((i = 0; i < $steps; $i++)); do
             if [ $i -le $progress ]; then
                 printf "="
             else
                 printf " "
             fi
         done
-        printf "] %d%%" $((progress * 100 / steps))
+        print "] %d%%" $((progress * 100 / steps))
         sleep $interval
         progress=$((progress + 1))
     done
     printf "\n"
 }
 
+# Function to automatically update the script
+update_script() {
+    echo "Downloading the latest version of the script..."
+    local script_url="https://example.com/phynx-mail-latest.sh"
+    local temp_file="/tmp/phynx-mail-latest.sh"
+
+    curl -s -o "$temp_file" "$script_url"
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Failed to download the latest version. Please update manually."
+        return 1
+    fi
+
+    chmod +x "$temp_file"
+    mv "$temp_file" "$0"
+    echo "Script updated successfully. Please re-run the script."
+    exit 0
+}
+
 # Define script version
 VERSION="1.0.0"
+
+check_a_record() {
+    # Prompt the user for FQDN
+    while true; do
+        read -p "Enter the domain name without the www. you'd like to check (subdomain 'mail' will automatically be added): " fqdn
+        if [[ "$fqdn" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+            break  # Exit the loop if the domain name is valid
+        else
+            echo "Invalid domain name. Please use a valid domain name."
+        fi
+    done
+
+    mailfqdn="mail.$fqdn"
+    server_ip=$(hostname -I | awk '{print $1}')
+
+    # Array of domains to check
+    local domains=("$mailfqdn" "$fqdn")
+    for domain in "${domains[@]}"; do
+        # Resolve all A records for the domain
+        local resolved_ips
+        resolved_ips=$(host -t A "$domain" 2>/dev/null | awk '/has address/ { print $4 }')
+
+        if [[ -z "$resolved_ips" ]]; then
+            echo "ERROR: No A record found for $domain."
+            echo "Please fix this and rerun the installation."
+            return 1
+        fi
+
+        # Convert space-separated IPs to comma-separated with a space
+        local resolved_ips_formatted
+        resolved_ips_formatted=$(echo "$resolved_ips" | tr ' ' ',' | sed 's/,/, /g')
+
+        # Display all resolved IPs
+        echo "Resolved IPs for $domain: $resolved_ips_formatted"
+
+        # Check if $server_ip is in the list of resolved IPs
+        if echo "$resolved_ips" | grep -q "$server_ip"; then
+            echo "SUCCESS: A record for $domain includes the server IP ($server_ip)."
+        else
+            echo "ERROR: A record for $domain does not include the server IP ($server_ip)."
+            echo "Please fix this and rerun the installation."
+            return 1
+        fi
+    done
+
+    return 0  # All checks passed
+}
+
+# Help and version menu
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    echo "Usage: ./phynx-mail.sh [options]"
+    echo "Options:"
+    echo "  --dry-run            Run the script in dry-run mode without making changes."
+    echo "  --uninstall          Uninstall the mail server, installed packages and clean up configuration files."
+    echo "  -h, --help           Display this help menu."
+    echo "  -v, --version        Display the script version."
+    echo "  -os, --os-version    Display the supported OS(s) and version(s)."
+    echo "  -A, --dns            Check A records in the DNS to see if they're updated yet."
+    exit 0
+fi
+
+# Check if the user wants to update
+if [ "$1" = "--update" ]; then
+    update_script
+fi
+
+# Check installation script version number
+if [[ "$1" == "-v" || "$1" == "--version" ]]; then
+    echo "Phynx Mail v$VERSION"
+    exit 0
+fi
+
+# Handle --os-version flag
+if [[ "$1" == "--os-version" || "$1" == "-os" ]]; then
+    echo "Supported OS: Ubuntu"
+    echo "Supported Versions:"
+    supported_versions_list
+    exit 0
+fi
+
+# Handle -A / --dns flag
+if [[ "$1" == "-A" || "$1" == "--dns" ]]; then
+    check_a_record
+    exit 0
+fi
 
 # Implement semantic versioning
 compare_versions() {
@@ -90,7 +237,7 @@ check_latest_version() {
             echo "'jq' is a lightweight and flexible command-line JSON processor, which is required for parsing JSON to check the version for updates." | tee -a "$LOG_FILE"
             read -p "Would you like to install 'jq' now? (Y/n): " install_jq_choice
             if [[ "$install_jq_choice" =~ ^[Yy]$ ]]; then
-                execute "apt-get install -y jq"
+                execute "apt-get install -y -qq jq"
             else
                 echo "'jq' is required for version checking. Please install it manually and re-run the script." | tee -a "$LOG_FILE"
                 exit 1
@@ -120,7 +267,7 @@ check_latest_version() {
             echo "Release Notes: $release_notes" | tee -a "$LOG_FILE"
             echo "Changelog: $changelog" | tee -a "$LOG_FILE"
             echo "Please update the script to the latest version before proceeding." | tee -a "$LOG_FILE"
-            read -p "Do you want to update now? (Y/N): " update_choice
+            read -p "Do you want to update now? (Y/n): " update_choice
             if [[ "$update_choice" =~ ^[Yy]$ ]]; then
                 update_script
             fi
@@ -136,6 +283,34 @@ check_latest_version() {
 
 # Call the version check function at the start of the script
 check_latest_version
+sleep 2
+
+check_distro() {
+    # Detect Linux distribution
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        DISTRO_ID="$ID"
+        DISTRO_VERSION_ID="$VERSION_ID"
+
+        # Define supported OS and version
+        case "$DISTRO_ID" in
+            ubuntu)
+                if (( $(echo "$DISTRO_VERSION_ID >= 20.04" | bc -l) )); then
+                    echo "You are running a supported OS version. To see a list of supported OS(s) and versions, please use --os-version or -os"
+                fi
+                ;;
+            *)
+                echo "You are currently on an unsupported version of Linux to run this script. Please use --os-version or -os for a list of supported versions."
+                ;;
+        esac
+    else
+        echo "ERROR /etc/os-release not found. Cannot determine OS details."
+    fi
+}
+
+# Call the distro checker function
+check_distro
+sleep 2
 
 # Step 1 Check dependencies
 echo "Step 1: Checking dependencies..."
@@ -147,75 +322,93 @@ for cmd in "${required_commands[@]}"; do
     fi
 done
 echo "All required dependencies are installed."
+sleep 2
 
-# Step 2: Retrieve server IP
-echo "Step 2: Detecting server IP..."
-server_ip=$(hostname -I | awk '{print $1}')
-check_success "Failed to retrieve server IP."
-echo "Detected server IP: $server_ip"
-
-# Step 3: Prompt for hostname and configure mailfqdn
-echo "Step 3: Configuring hostname..."
+# Step 2: Prompt for hostname and configure mailfqdn
+echo "Step 2: Configuring hostname..."
 echo "The mail subdomain will automatically be added."
 read -p "Enter the domain name for the mail server without the www. (e.g., example.com): " fqdn
 # Validate domain name
 if [[ ! "$fqdn" =~ ^[a-zA-Z0-9.-]+$ ]]; then
     echo "Invalid domain name. Please use a valid domain name."
-    exit 1
+    exit 0
 fi
+
 sub_domain="mail"
 mailfqdn="$sub_domain.$fqdn"
+
+# Step 3: Retrieve server IP
+echo "Step 3: Detecting server IP..."
+server_ip=$(hostname -I | awk '{print $1}')
+check_success "Failed to retrieve server IP."
+echo "Detected server IP: $server_ip"
+
+# Check if A record for the FQDN matches the server IP
+resolved_ip=$(host -t A "$mailfqdn" 2>/dev/null | awk '/has address/ { print $4 }')
+
+if [[ -z "$resolved_ip" ]]; then
+    echo "ERROR: No A record found for $mailfqdn."
+    echo "Please ensure the domain points to the server IP ($server_ip) and try again."
+    echo "You can use the -A or --dns flag when running the installation to check."
+    exit 1
+fi
+
+if echo "$resolved_ip" | grep -q "$server_ip"; then
+    echo "SUCCESS: A record for $mailfqdn includes the server IP ($server_ip)."
+else
+    echo "ERROR: A record for $mailfqdn does not include the server IP ($server_ip)."
+    echo "Resolved IP(s) for $mailfqdn: $resolved_ip"
+    echo "Please update the DNS records to point $mailfqdn to $server_ip and try again."
+    echo "You can use the -A or --dns flag when running the installation to check."
+    exit 1
+fi
+sleep 2
+
 echo "Configured mail server FQDN: $mailfqdn"
+sleep 2
+
+hostnamectl set-hostname $fqdn
+echo "Changed hostname to $fqdn"
+sleep 2
 
 # Step 4: Install required packages
 echo "Step 4: Installing required packages..."
-required_packages=("postfix" "postfix-pcre" "dovecot-imapd" "dovecot-pop3d" "dovecot-sieve" "opendkim" "opendkim-tools" "spamassassin" "spamc" "net-tools" "fail2ban" "bind9-host")
+
+# Define array of packages required for installation
+required_packages=("opendkim" "opendkim-tools" "postfix" "postfix-pcre" "dovecot-core" "dovecot-sieve" "dovecot-imapd" "dovecot-pop3d" "spamassassin" "spamc" "spamd" "wget" "curl" "net-tools" "fail2ban" "bind9-host" "mailutils" "apache2" "certbot" "python3" "python3-certbot-apache")
+
+# Loop through packages and install individually
 for pkg in "${required_packages[@]}"; do
-    if ! dpkg -l | grep -qw "$pkg"; then
-        execute "$package_manager install -y -qq $pkg"
+    echo "Installing $pkg..."
+    sudo apt-get install -y -qq "$pkg"
+
+    # Check if installation of each package is successful
+    if [ $? -eq 0 ]; then
+        echo "$pkg installed successfully."
     else
-        echo "$pkg is already installed."
+        echo "Failed to install $pkg."
     fi
 done
-echo "All required packages are installed."
+echo "All required packages have been installed successfully."
 
 # Step 5: Prompt for SSL certificate configuration
 echo "Step 5: SSL certificate configuration..."
 read -p "Do you want to configure an SSL certificate? (Y/n): " ssl_choice
 if [[ "$ssl_choice" =~ ^[Yy]$ ]]; then
-    self_signed="no"
-    cert_config="yes"
+    read -p "Please enter the email you'd like to use: " ssl_email
+    sleep 2
+    certbot certonly --expand --apache -d $fqdn -d $mailfqdn --email $ssl_email --agree-tos --deploy-hook "echo \"$RENEWED_DOMAINS\" | grep -q '$mailfqdn' && service postfix reload && service dovecot reload"
 else
-    self_signed="yes"
-    cert_config="no"
-fi
-
-# Add SSL email configuration
-if [[ "$ssl_choice" =~ ^[Yy]$ ]]; then
-    read -p "Enter your email address for SSL certificate registration: " ssl_email
-    if [[ -z "$ssl_email" ]]; then
-        echo "No email provided. Using --register-unsafely-without-email."
-        ssl_email_option="--register-unsafely-without-email"
-    else
-        ssl_email_option="--email $ssl_email"
-    fi
-fi
-
-# Update SSL certificate configuration logic
-if [[ "$cert_config" = "yes" ]]; then
-    execute "certbot certonly --standalone $ssl_email_option -d $fqdn"
-    echo "SSL certificate configured successfully."
-else
-    echo "Skipping SSL certificate configuration."
+    echo "Skipping SSL certificate generation. You can generate your own SSL certificate later on."
 fi
 
 # Step 6: Prompt for IPv6 usage
 echo "Step 6: Checking IPv6 configuration..."
-read -p "Will you use IPv6? (Y/N): " ipv6_choice
+read -p "Will you use IPv6? (y/N): " ipv6_choice
 if [[ "$ipv6_choice" =~ ^[Yy]$ ]]; then
     ipv6=$(host "$fqdn" | grep "IPv6" | awk '{print $NF}')
     if [ -z "$ipv6" ]; then
-        echo "\033[0;31mIf you use IPv6, please make sure your domain ($fqdn) is pointed to $ipv6 to continue.\033[0m"
+        echo "\033[0;31mIf you use IPv6, please make sure your domain ($fqdn) is pointed to $ipv6 before you continue.\033[0m"
         exit 0
     fi
 else
@@ -233,99 +426,28 @@ protocol=${protocol:-"imap pop3"}
 read -p "Enter the ports to open (default: 25, 80, 110, 465, 587, 993, 995): " ports
 ports=${ports:-"25 80 110 465 587 993 995"}
 
-# Detect Linux distribution
-linux_distro="$(. /etc/os-release && echo $ID)"
-case "$linux_distro" in
-    ubuntu|debian)
-        package_manager="apt-get"
-        ;;
-    centos|rhel)
-        package_manager="yum"
-        ;;
-    fedora)
-        package_manager="dnf"
-        ;;
-    *)
-        echo "Unsupported Linux distribution: $linux_distro"
-        exit 1
-        ;;
-esac
-
-# Notify user of completion
-echo "Packages installed successfully."
-
-if [ "$cert_config" = "yes" ]; then
-    echo "
-    [req]
-    default_bit = 4096
-    distingquished_name = req_distinguished_name
-    prompt = no
-
-    [req_distinguished_name]
-    countryName = $CN
-    stateOrProvinceName = $ST
-    organizationName = $ON
-    commonName = $common_name"
-fi
-
-# Preliminary DNS checks
-ipv4=$(host "$fqdn" | grep -m1 -Eo '([0-9]+\.){3}[0-9]+')
-#ipv6 = $(host "$fqdn" | grep "IPv6" | awk '{print $NF}')
-[ -z "$ipv4" ] && echo "\033[0;31mPlease make sure your domain ("$fqdn") is pointed to $ipv4 to continue." && exit 1
-#[ -z "$ipv6" ] && echo "\033[0;31mIf you use IPv6, please make sure your domain ("$fqdn") is pointed to $ipv6 to continue." && exit 0
+# Convert the $ports variable into an array
+IFS=' ' read -r -a ports_array <<< "$ports"
 
 # Open the required ports
-for port in $ports; do
-    ufw allow "$port" 2>/dev/null
-done
+for port in "${ports_array[@]}"; do
+    echo "Opening port $port..."
+    sudo ufw allow "$port" 2>/dev/null
 
-if [ "$self_signed" = "yes" ]; then
-    rm -f $cert_dir/privkey.pem
-    rm -f $cert_dir/csr.pem
-    rm -f $cert_dir/fullchain.pem
-
-    echo "Generating standard RSA key with self-signed certificate."
-    mkdir -p $cert_dir
-    openssl genrsa -out $cert_dir/privkey.pem 4096
-
-    if [ "$cert_config" = "yes" ]; then
-        openssl req -new -key $cert_dir/privkey.pem -out $cert_dir/csr.pem -config $cert_dir/certconfig.conf
+    # Check if the ports are opened successfully or not
+    if [ $? -eq 0 ]; then
+        echo "Port $port opened successfully."
     else
-        openssl req -new -key $cert_dir/privkey.pem -out $cert_dir/csr.pem
+        echo "Failed to open port $port. Please contact your server administrator to open the required ports, then rerun the installation."
     fi
-    openssl req -x509 -days 365250 -key $cert_dir/privkey.pem -in $cert_dir/csr.pem -out $cert_dir/fullchain.pem
-else
+done
+ufw allow 'Apache Full'
+systemctl enable apache2
+systemctl stop apache2
+sleep 2
 
-    # Find if the cert already exists
-    [ ! -d "$cert_dir" ] && possiblecert="$(certbot certificates 2>/dev/null | grep "Domains:\.* \(\*\.$fqdn\|$mailfqdn\)\(\s\|$\)" -A 2 | awk '/Certificate Path/ {print $3}' | head -n1)" && cert_dir="${possiblecert%/*}"
-
-    [ ! -d "$cert_dir" ] && cert_dir="/etc/letsencrypt/live/$mailfqdn" &&
-    case "$(netstat -tulpn | grep ":80\s")" in
-    *apache*)
-        apt install -y python3-certbot-apache
-        certbot -d "$mailfqdn" certonly --apache --register-unsafely-without-email --agree-tos
-        ;;
-    *nginx*)
-        apt install -y python3-certbot-nginx
-        certbot -d "$mailfqdn" certonly --nginx --register-unsafely-without-email --agree-tos
-        ;;
-    *)
-        apt install -y python3-certbot
-        certbot -d "$mailfqdn" certonly --standalone --register-unsafely-without-email --agree-tos
-        ;;
-    esac
-fi
-
-[ ! -f "$cert_dir/fullchain.pem" ] && echo "ERROR locating or installing SSL certificate." && exit 1
-[ ! -f "$cert_dir/privkey.pem" ] && echo "ERROR locating or installing SSL certificate." && exit 1
-
-if [ "$self_signed" != "yes" ]; then
-    [ ! -f "$cert_dir/cert.pem" ] && echo "ERROR locating or installing SSL certificate." && exit 1
-fi
-
-[ ! -d "$cert_dir" ] && echo "ERROR locating or installing SSL certificate." && exit 1
-
-echo "Configuring Postfix"
+# Certbot directory
+cert_dir="/etc/letsencrypt/live/$mailfqdn"
 
 # Additional variables to add to mydestination
 postconf -e "myhostname = $mailfqdn"
@@ -336,9 +458,6 @@ postconf -e 'mydestination = $myhostname, $mydomain, mail, localhost.localdomain
 # Move the cert & key files to the default location of Let's Encrypt
 postconf -e "smtpd_tls_key_file=$cert_dir/privkey.pem"
 postconf -e "smtpd_tls_cert_file=$cert_dir/fullchain.pem"
-if [ "$self_signed" != "yes" ]; then
-    postconf -e "smtp_tls_CAfile=$cert_dir/cert.pem"
-fi
 
 # TLS conf and variables
 postconf -e 'smtpd_tls_security_level = may'
@@ -381,7 +500,7 @@ echo "/^Received:.*/ IGNORE
       /^X-Originating-IP:/  IGNORE" >> /etc/postfix/header_checks
 
 # Use login map to ensure the sender is authenticated as the sender
-echo "/^(.*)@$(sh -c "echo $fqdn | sed 's/\./\\\./'")$/   \${!}" > /etc/postfix/login_maps.pcre
+echo "/^(.*)@$(sh -c "echo $fqdn | sed 's/\./\\\./'")$/   \${1}" > /etc/postfix/login_maps.pcre
 
 echo "Configuring Postfix..."
 sed -i '/^\s*-o/d;/^\s*submission/d;/^\s*smtp/d' /etc/postfix/master.cf
@@ -406,6 +525,7 @@ spamassassin unix -     n       n       -       -       pipe
 
 # Backup Dovecot config
 mv /etc/dovecot/dovecot.conf /etc/dovecot/dovecot.conf.bak
+sleep 2
 
 echo "Configuring Dovecot..."
 echo "
@@ -514,21 +634,23 @@ echo 'Preparing user authentication...'
 grep -q nullok /etc/pam.d/dovecot ||
 echo 'auth    required        pam_unix.so nullok
 account required        pam_unix.so' >> /etc/pam.d/dovecot
+sleep 2
 
 # OpenDKIM
 echo "Generating OpenDKIM keys..."
+groupadd opendkim
 mkdir -p "/etc/postfix/dkim/$fqdn"
-opendkim-genkey -D "/etc/postfix/dkim/$fqdn" -d "$fqdn" -s "$subdomain"
+/usr/sbin/opendkim-genkey -D "/etc/postfix/dkim/$fqdn" -d "$fqdn" -s "$mailfqdn"
 chgrp -R opendkim /etc/postfix/dkim/*
 chmod -R g+r /etc/postfix/dkim/*
 
 echo "Generating OpenDKIM info..."
 
 grep -q "$fqdn" /etc/postfix/dkim/keytable 2>/dev/null ||
-echo "$subdomain._domainkey.$fqdn $fqdn:$subdomain:/etc/postfix/dkim/$fqdn/$subdomain.private" >> /etc/postfix/dkim/keytable
+echo "$mailfqdn._domainkey.$fqdn $fqdn:$mailfqdn:/etc/postfix/dkim/$fqdn/$mailfqdn.private" >> /etc/postfix/dkim/keytable
 
 grep -q "$fqdn" /etc/postfix/dkim/signingtable 2>/dev/null ||
-echo "*@$fqdn $subdomain._domainkey.$fqdn" >> /etc/postfix/dkim/signingtable
+echo "*@$fqdn $mailfqdn._domainkey.$fqdn" >> /etc/postfix/dkim/signingtable
 
 grep -q '127.0.0.1' /etc/postfix/dkim/trustedhosts 2>/dev/null ||
 echo '127.0.0.1
@@ -538,14 +660,13 @@ grep -q '^KeyTable' /etc/opendkim.conf 2>/dev/null ||
 echo 'KeyTable file:/etc/postfix/dkim/keytable
       SigningTable refile:/etc/postfix/dkim/signingtable
       InternalHosts refile:/etc/postfix/dkim/trustedhosts' >> /etc/opendkim.conf
-sed -i '/^#Canonicalization/s/simple/relaxed\/simple/' /etc/opendkim.conf
-sed -i '/^#Canonicalization/s/^#//' /etc/opendkim.conf
-sed -i '/Socket/s^#*/#/' /etc/opendkim.conf
+
+grep -q '^Canonicalization' /etc/opendkim.conf 2>/dev/null ||
+echo 'Canonicalization relaxed/simple' >> /etc/opendkim.conf
+
 grep -q '^Socket\s*inet:12301@localhost' /etc/opendkim.conf ||
 echo 'Socket inet:12301@localhost' >> /etc/opendkim.conf
-
-# Remove previous active socket for OpenDKIM daemon
-sed -i '/^SOCKET/d' /etc/default/opendkim && echo "SOCKET=\"inet:12301@localhost\"" >> /etc/default/opendkim
+sleep 2
 
 # Add needed settings for OpenDKIM to Postfix conf
 echo "Configuring Postfix with OpenDKIM settings..."
@@ -561,12 +682,12 @@ postconf -e 'smtpd_forbid_bare_newline = normalize'
 postconf -e 'smtpd_forbid_bare_newline_exclusions = $mynetworks'
 
 # OpenDKIM PID file fix
-/lib/opendkim/opendkim.service.generate
+/usr/lib/opendkim/opendkim.service.generate
 systemctl daemon-reload
+sleep 2
 
 # Enable Fail2Ban security
-[ ! -f /etc/fail2ban/jail.d/phynxmail.local ] &&
-echo "
+[ ! -f /etc/fail2ban/jail.d/phynxmail.local ] && echo "
 [postfix]
 enabled = true
 
@@ -585,33 +706,39 @@ if [ -f /etc/default/spamassassin ]
 then
     sed -i "s|^CRON=0|CRON=1|" /etc/default/spamassassin
     printf "Restarting SpamAssassin..."
-    service spamassassin restart && printf "and... DONE\\n"
+    service spamassassin restart && printf " DONE\n"
     systemctl enable spamassassin
-elseif [ -f /etc/default/spamd ]
+    sleep 2
+elif [ -f /etc/default/spamd ]
 then
     sed -i "s|^CRON=0|CRON=1|" /etc/default/spamd
     printf "Restarting SPAMD..."
-    service spamd restart && printf "and... DONE \\n"
+    service spamd restart && printf " DONE \n"
     systemctl enable spamd
+    sleep 2
 else
-    printf "ERROR: /etc/default/spamassassin or /etc/default/spamd do NOT exist. Make sure they're installed before proceeding."
+    printf "ERROR: /etc/default/spamassassin or /etc/default/spamd do NOT exist. Make sure they're installed before proceeding.\n"
+    exit 1
 fi
 
 for process in opendkim dovecot postfix fail2ban; do
     printf "Restarting %s..." "$process"
-    service "$process" restart && printf "and... DONE\\n"
+    service "$process" restart && printf " DONE\n"
     systemctl enable "$process"
+    sleep 2
 done
 
 # Create DNS records for template examples
-pval="$(tr -d '\n' <"/etc/postfix/dkim/$fqdn/$subdomain.txt" | sed "s/k=rsa.* \"p=/k=rsa; p=/;s/\"\s*\"//;s/\"\s*).*//" | grep -o 'p=.*')"
-dkim_entry="$subdomain._domainkey.$fqdn   TXT v=DKIM1; k=rsa; $pval"
+pval="$(tr -d '\n' <"/etc/postfix/dkim/$fqdn/$mailfqdn.txt" | sed "s/k=rsa.* \"p=/k=rsa; p=/;s/\"\s*\"//;s/\"\s*).*//" | grep -o 'p=.*')"
+dkim_entry="$mailfqdn._domainkey.$fqdn   TXT v=DKIM1; k=rsa; $pval"
 dmarc_entry="_dmarc.$fqdn   TXT v=DMARC1; p=reject; rua=mailto:postmaster@$fqdn; fo=1"
 spf_entry="$fqdn   TXT v=spf1 mx a:$fqdn ipv4:$ipv4 -all"
 mx_entry="$fqdn   MX 10 $mailfqdn 200"
+sleep 2
 
 # Create postmaster user and add to mail group
 useradd -m -G mail postmaster
+sleep 2
 
 # Create a new cronjob that deletes old emails past certain day count
 cat <<EOF > /etc/cron.weekly/postmaster-clean
@@ -626,13 +753,16 @@ EOF
 chmod 755 /etc/cron.weekly/postmaster-clean
 
 # Deploy hooks
-grep -q '^deploy-hook = echo "$RENEWED_DOMAINS" | grep -q' /etc/letsencrypt/cli.ini ||
-echo "deplay-hook = echo \"\$RENEWED_DOMAINS\" | grep -q '$mailfqdn' && service postfix reload && service dovecot reload" >> /etc/letsencrypt/cli.ini
+#grep -q '^deploy-hook = echo "$RENEWED_DOMAINS" | grep -q' /etc/letsencrypt/cli.ini ||
+#echo "deploy-hook = echo \"\$RENEWED_DOMAINS\" | grep -q '$mailfqdn' && service postfix reload && service dovecot reload" >> /etc/letsencrypt/cli.ini
+#sleep 2
+
 echo "INFO: Entries will appear different depending on your domain name's registrar DNS settings. These are to be used as guides or 'templates'.
 $dkim_entry
 $dmarc_entry
 $spf_entry
 $mx_entry" > "$HOME/phynxmail_dns"
+sleep 2
 
 printf "
 ADD THESE RECORDS TO YOUR DNS TXT RECORDS:
@@ -645,16 +775,16 @@ THESE ARE SAVED TO '~/phynxmail_dns' FOR REFERENCE
 
 IMPORTANT: IF YOU CHOSE TO USE A LET'S ENCRYPT SSL CERTIFICATE, PLEASE MAKE SURE YOU HAVE YOUR EMAIL SERVER'S A AND MX RECORDS POINTING TO THIS SERVER BEFORE RUNNING THE FOLLOWING COMMAND:
 
-certbot --nginx --register-unsafely-without-email --agree-tos -d $mailfqdn
+certbot certonly --standalone -d $fqdn -d $mailfqdn --agree-tos
 
 AFTER SUCCESSFULLY OBTAINING YOUR SSL CERTIFICATE, REMEMBER TO RESTART POSTFIX AND DOVECOT:
-
 systemctl restart postfix dovecot
 
 "
+sleep 2
 
 # Step 9: Post-installation summary
-echo "\nPost-installation Summary:\n"
+echo "Post-installation Summary:"
 echo "Server IP: $server_ip"
 echo "Hostname: $fqdn"
 echo "SSL Configured: $cert_config"
@@ -662,35 +792,13 @@ echo "IPv6 Address: ${ipv6:-None}"
 echo "Mailbox Directory: $mailbox_dir"
 echo "Allowed Protocols: $protocol"
 echo "Open Ports: $ports"
-echo "\nInstallation completed successfully. Please verify the configuration and restart the necessary services."
+echo "Installation completed successfully. Please verify the configuration and restart the necessary services."
 
-# Step 10: Uninstallation option
-if [ "$1" = "--uninstall" ]; then
-    echo "\nUninstalling mail server..."
 
-    # Stop services
-    echo "Stopping services..."
-    execute "systemctl stop postfix dovecot opendkim"
-
-    # Remove installed packages
-    echo "Removing installed packages..."
-    execute "$package_manager remove -y postfix postfix-pcre dovecot-imapd dovecot-pop3d dovecot-sieve opendkim opendkim-tools spamassassin spamc net-tools fail2ban bind9-host"
-
-    # Remove configuration files
-    echo "Removing configuration files..."
-    execute "rm -rf /etc/postfix /etc/dovecot /etc/opendkim /var/spool/postfix /var/mail"
-
-    # Remove log files
-    echo "Removing log files..."
-    execute "rm -f $LOG_FILE"
-
-    echo "Uninstallation completed successfully."
-    exit 0
-fi
 
 # Step 11 Send test email
 send_test_email() {
-    echo "\nSending test email..."
+    echo "Sending test email..."
 
     # Define test email parameters
     local test_email="test@example.com"
@@ -712,7 +820,7 @@ send_test_email
 
 # Step 11: Backup existing configuration
 backup_configuration() {
-    echo "\nBacking up existing configuration files..."
+    echo "Backing up existing configuration files..."
 
     # Define backup directory
     local backup_dir="/var/backups/phynx-mail-$(date +%Y%m%d%H%M%S)"
@@ -738,12 +846,12 @@ backup_configuration() {
     echo "Backup completed. Files saved to: $backup_dir"
 }
 
-# Call the function at the start of the script
+# Call the function for backup
 backup_configuration
 
 # Step 12: Environment-specific adjustments
 detect_environment() {
-    echo "\nDetecting environment..."
+    echo "Detecting environment..."
 
     # Check if running in Docker
     if [ -f "/.dockerenv" ]; then
@@ -764,65 +872,52 @@ detect_environment() {
     echo "Environment detection and adjustments completed."
 }
 
-# Call the function at the start of the script
-detect_environment
+# Call the function to change whatever is needed based on environment
+# detect_environment
 
 # Step 13: Localization support
-localize() {
-    local lang_file="/etc/phynx-mail/lang/en.lang"
-    if [ -n "$LANG" ]; then
-        lang_file="/etc/phynx-mail/lang/${LANG:0:2}.lang"
-    fi
-
-    if [ -f "$lang_file" ]; then
-        source "$lang_file"
-        echo "Localization loaded: ${LANG:0:2}"
-    else
-        echo "Localization file not found. Defaulting to English."
-    fi
-}
+# localize() {
+#    local lang_file="/etc/phynx-mail/lang/en.lang"
+#    if [ -n "$LANG" ]; then
+#        lang_file="/etc/phynx-mail/lang/${LANG:0:2}.lang"
+#    fi
+#
+#    if [ -f "$lang_file" ]; then
+#        source "$lang_file"
+#        echo "Localization loaded: ${LANG:0:2}"
+#    else
+#        echo "Localization file not found. Defaulting to English."
+#    fi
+#}
 
 # Example usage of localization
-localize
+# localize
 
 # Replace echo statements with localized variables
-echo "${MSG_WELCOME:-Welcome to the Phynx Mail Setup Script!}"
+# echo "${MSG_WELCOME:-Welcome to the Phynx Mail Setup Script!}"
 
-# Add help and version menu
-if [[ "$1" == "-h" || "$1" == "--help" ]]; then
-    echo "Usage: phynx-mail.sh [options]"
-    echo "Options:"
-    echo "  --dry-run       Run the script in dry-run mode without making changes."
-    echo "  --uninstall     Uninstall the mail server and clean up configuration files."
-    echo "  -h, --help      Display this help menu."
-    echo "  -v, --version   Display the script version."
+
+
+# Step: Uninstallation option
+if [ "$1" = "--uninstall" ]; then
+    echo "Uninstalling mail server..."
+
+    # Stop services
+    echo "Stopping services..."
+    execute "systemctl stop postfix dovecot opendkim"
+
+    # Remove installed packages
+    echo "Removing installed packages..."
+    execute "$package_manager remove -y postfix postfix-pcre dovecot-core dovecot-sieve dovecot-imapd dovecot-pop3d opendkim opendkim-tools spamassassin spamc spamd net-tools fail2ban bind9-host"
+
+    # Remove configuration files
+    echo "Removing configuration files..."
+    execute "rm -rf /etc/postfix /etc/dovecot /etc/opendkim /var/spool/postfix /var/mail"
+
+    # Remove log files
+    echo "Removing log files..."
+    execute "rm -f $LOG_FILE"
+
+    echo "Uninstallation completed successfully."
     exit 0
-fi
-
-if [[ "$1" == "-v" || "$1" == "--version" ]]; then
-    echo "Phynx Mail Setup Script Version 1.0.0"
-    exit 0
-fi
-
-# Function to automatically update the script
-update_script() {
-    echo "Downloading the latest version of the script..."
-    local script_url="https://example.com/phynx-mail-latest.sh"
-    local temp_file="/tmp/phynx-mail-latest.sh"
-
-    curl -s -o "$temp_file" "$script_url"
-    if [ $? -ne 0 ]; then
-        echo "ERROR: Failed to download the latest version. Please update manually."
-        return 1
-    fi
-
-    chmod +x "$temp_file"
-    mv "$temp_file" "$0"
-    echo "Script updated successfully. Please re-run the script."
-    exit 0
-}
-
-# Check if the user wants to update
-if [ "$1" = "--update" ]; then
-    update_script
 fi
